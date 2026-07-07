@@ -700,6 +700,61 @@ def count_entities(
     return query.count()
 
 
+def _has_nonempty_metadata(key: str):
+    """Correlated EXISTS: the outer entity has a non-empty value under `key`.
+
+    Empty means NULL, "" or "{}" (the latter is what the structured_vlm plugin
+    writes when parsing fails), so those are treated as still-missing and will
+    be reprocessed. TRIM is portable across SQLite and PostgreSQL."""
+    return (
+        select(EntityMetadataModel.entity_id)
+        .where(EntityMetadataModel.entity_id == EntityModel.id)
+        .where(EntityMetadataModel.key == key)
+        .where(EntityMetadataModel.value.isnot(None))
+        .where(func.trim(EntityMetadataModel.value).notin_(("", "{}")))
+        .exists()
+    )
+
+
+def count_entities_missing_metadata(
+    db: Session, *, key: str, library_ids: Optional[List[int]] = None
+) -> int:
+    """Count image entities lacking a non-empty metadata value under `key`.
+    Used to size a plugin backfill run (e.g. structured_vlm)."""
+    query = db.query(EntityModel).filter(EntityModel.file_type_group == "image")
+    if library_ids:
+        query = query.filter(EntityModel.library_id.in_(library_ids))
+    return query.filter(~_has_nonempty_metadata(key)).count()
+
+
+def list_entities_missing_metadata(
+    db: Session,
+    *,
+    key: str,
+    library_ids: Optional[List[int]] = None,
+    after_id: int = 0,
+    limit: int = 1000,
+) -> List[Tuple[int, str]]:
+    """Keyset page of (id, filepath) for image entities missing a non-empty value
+    under `key`, ordered by id ascending. Resumable: pass the last returned id as
+    `after_id` for the next page. Filled keys drop out automatically, so a fresh
+    full pass simply skips whatever earlier passes completed."""
+    query = (
+        db.query(EntityModel.id, EntityModel.filepath)
+        .filter(EntityModel.file_type_group == "image")
+        .filter(EntityModel.id > after_id)
+    )
+    if library_ids:
+        query = query.filter(EntityModel.library_id.in_(library_ids))
+    rows = (
+        query.filter(~_has_nonempty_metadata(key))
+        .order_by(EntityModel.id)
+        .limit(limit)
+        .all()
+    )
+    return [(row[0], row[1]) for row in rows]
+
+
 def get_entity_context(
     db: Session, library_id: int, entity_id: int, prev: int = 0, next: int = 0
 ) -> Tuple[List[Entity], List[Entity]]:

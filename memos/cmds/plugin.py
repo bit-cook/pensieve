@@ -1,3 +1,5 @@
+from typing import Optional
+
 import typer
 import httpx
 from tabulate import tabulate
@@ -78,6 +80,54 @@ def bind(
         print(
             f"Failed to bind plugin to library: {response.status_code} - {response.text}"
         )
+
+
+@plugin_app.command("backfill")
+def backfill(
+    plugin: str = typer.Option(
+        "structured_vlm", "--plugin", "-p",
+        help="Which plugin's metadata to backfill (currently: structured_vlm)",
+    ),
+    library_id: Optional[int] = typer.Option(
+        None, "--lib", help="Restrict to one library (default: all libraries)"
+    ),
+    concurrency: Optional[int] = typer.Option(
+        None, "--concurrency", "-c",
+        help="Parallel VLM requests (default: vlm.concurrency from config)",
+    ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", help="Process at most N entities (use to measure throughput)"
+    ),
+    page_size: int = typer.Option(
+        2000, "--page-size", help="How many entity ids to fetch from the DB per page"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Only report how many entities are missing the key"
+    ),
+):
+    """Backfill a plugin's metadata for historical entities missing it.
+
+    Only the gap is processed; the run is idempotent and resumable, so re-running
+    picks up where it left off. Results are written through the API, refreshing
+    each entity's search index in the same pass. Example — fill the current
+    structured_vlm key for all old screenshots at 24-way concurrency:
+
+        memos plugin backfill -c 24
+    """
+    from memos.cmds.backfill import run_backfill
+
+    try:
+        run_backfill(
+            plugin=plugin,
+            library_id=library_id,
+            concurrency=concurrency,
+            limit=limit,
+            page_size=page_size,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        typer.echo(str(e))
+        raise typer.Exit(code=1)
 
 
 @plugin_app.command("unbind")
